@@ -37,3 +37,14 @@ jobs:
             docker compose pull &&
             docker compose --env-file .env up -d
           "
+      - name: Check container logs
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+            cd ~/n8n-cloud &&
+            echo '=== NGINX LOGS ===' &&
+            docker logs nginx --tail 20 &&
+            echo '=== N8N LOGS ===' &&
+            docker logs n8n --tail 20 &&
+            echo '=== CONTAINER STATUS ===' &&
+            docker ps
+          "
