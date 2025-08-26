@@ -21,11 +21,19 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.VM_SSH_KEY }}
 
-      # 3. Conectar na VM e atualizar containers
+      # 3. Copiar os arquivos do repo para a VM (sem sobrescrever o .env)
+      - name: Sync repo to VM
+        run: |
+          rsync -avz --delete \
+            --exclude '.env' \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/n8n-cloud/
+
+      # 4. Subir stack docker na VM
       - name: Deploy stack on VM
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-          cd ~/n8n-cloud &&
-          docker compose pull &&
-          docker compose --env-file .env up -d
+            cd ~/n8n-cloud &&
+            docker compose pull &&
+            docker compose --env-file .env up -d
           "
