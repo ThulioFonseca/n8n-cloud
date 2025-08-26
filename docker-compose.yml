@@ -1,0 +1,53 @@
+networks:
+  proxy-tier:
+    external: false
+
+services:
+  nginx-proxy:
+    image: jwilder/nginx-proxy:alpine
+    container_name: nginx-proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx_data/certs:/etc/nginx/certs:ro
+      - ./nginx_data/vhost.d:/etc/nginx/vhost.d
+      - ./nginx_data/html:/usr/share/nginx/html
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+    networks:
+      - proxy-tier
+
+  letsencrypt:
+    image: jrcs/letsencrypt-nginx-proxy-companion
+    container_name: nginx-proxy-letsencrypt
+    restart: always
+    environment:
+      - NGINX_PROXY_CONTAINER=nginx-proxy
+    volumes:
+      - ./nginx_data/certs:/etc/nginx/certs
+      - ./nginx_data/vhost.d:/etc/nginx/vhost.d
+      - ./nginx_data/html:/usr/share/nginx/html
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - nginx-proxy
+    networks:
+      - proxy-tier
+
+  n8n:
+    image: n8nio/n8n
+    container_name: n8n
+    restart: always
+    environment:
+      - VIRTUAL_HOST=${DOMAIN}
+      - LETSENCRYPT_HOST=${DOMAIN}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_PORT=5678
+      - TZ=America/Sao_Paulo
+    volumes:
+      - ./n8n_data:/home/node/.n8n
+    networks:
+      - proxy-tier
