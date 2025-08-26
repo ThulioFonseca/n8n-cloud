@@ -25,7 +25,7 @@ jobs:
       - name: Deploy stack on VM
         run: |
           ssh -o StrictHostKeyChecking=no -o IdentitiesOnly=yes \
-          -i ~/.ssh/n8n_deploy_key ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+          ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
           cd ~/n8n-cloud &&
           docker compose pull &&
           docker compose --env-file .env up -d
