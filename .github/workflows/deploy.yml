@@ -25,6 +25,7 @@ jobs:
       - name: Sync repo to VM
         run: |
           rsync -avz --delete \
+            --exclude 'nginx_data/' \
             --exclude '.env' \
             -e "ssh -o StrictHostKeyChecking=no" \
             ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/n8n-cloud/
