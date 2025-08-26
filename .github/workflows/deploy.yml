@@ -1,70 +1,142 @@
-name: Deploy n8n cloud
+name: Deploy N8N to Azure VM
 
 on:
   push:
     branches:
-      - main  # disparar deploy apenas no branch main
+      - main
+  workflow_dispatch:
 
 jobs:
   deploy:
-    name: Deploy to VM
+    name: Deploy to Azure VM
     runs-on: ubuntu-latest
-
+    
     steps:
       # 1. Checkout do código
-      - name: Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      # 2. Configurar SSH para acessar a VM
-      - name: Set up SSH
+      # 2. Configurar SSH
+      - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.VM_SSH_KEY }}
 
-      # 3. Copiar os arquivos do repo para a VM (sem sobrescrever o .env)
-      - name: Sync repo to VM
+      # 3. Verificar conectividade
+      - name: Test SSH connection
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "echo 'SSH connection successful'"
+
+      # 4. Sincronizar arquivos (excluindo .env e dados)
+      - name: Sync files to VM
         run: |
           rsync -avz --delete \
-            --exclude '*_data/' \
             --exclude '.env' \
+            --exclude 'n8n_data/' \
+            --exclude '.git/' \
+            --exclude 'README.md' \
             -e "ssh -o StrictHostKeyChecking=no" \
             ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/n8n-cloud/
 
-      # 4. Subir stack docker na VM
-      - name: Deploy stack on VM
+      # 5. Verificar se .env existe na VM
+      - name: Check .env file
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud &&
-            docker compose pull &&
+            cd ~/n8n-cloud
+            if [ ! -f .env ]; then
+              echo 'ERRO: Arquivo .env não encontrado na VM!'
+              echo 'Crie o arquivo .env com as variáveis necessárias'
+              exit 1
+            else
+              echo '.env encontrado ✓'
+              echo 'Variáveis definidas:'
+              grep -v PASSWORD .env || true
+            fi
+          "
+
+      # 6. Preparar ambiente
+      - name: Prepare environment
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+            cd ~/n8n-cloud
+            
+            # Criar diretórios necessários
+            mkdir -p n8n_data
+            
+            # Ajustar permissões
+            sudo chown -R 1000:1000 n8n_data/ || true
+            
+            # Verificar Docker
+            docker --version
+            docker compose version
+          "
+
+      # 7. Deploy da aplicação
+      - name: Deploy application
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+            cd ~/n8n-cloud
+            
+            echo '=== Parando containers antigos ==='
+            docker compose down --remove-orphans
+            
+            echo '=== Baixando imagens mais recentes ==='
+            docker compose pull
+            
+            echo '=== Iniciando aplicação ==='
             docker compose --env-file .env up -d
+            
+            echo '=== Aguardando inicialização ==='
+            sleep 30
           "
-      - name: Check container logs
+
+      # 8. Verificar deploy
+      - name: Verify deployment
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud &&
-            echo '=== NGINX LOGS ===' &&
-            docker logs nginx --tail 20 &&
-            echo '=== N8N LOGS ===' &&
-            docker logs n8n --tail 20 &&
-            echo '=== CONTAINER STATUS ===' &&
-            docker ps
+            cd ~/n8n-cloud
+            
+            echo '=== Status dos containers ==='
+            docker compose ps
+            
+            echo '=== Health check dos serviços ==='
+            
+            # Verificar Nginx
+            if curl -f -s http://localhost/health > /dev/null; then
+              echo '✓ Nginx está funcionando'
+            else
+              echo '✗ Nginx não está respondendo'
+            fi
+            
+            # Aguardar N8N ficar pronto
+            echo 'Aguardando N8N...'
+            for i in {1..12}; do
+              if docker exec n8n curl -f http://localhost:5678/healthz > /dev/null 2>&1; then
+                echo '✓ N8N está funcionando'
+                break
+              else
+                echo \"Tentativa \$i/12: N8N ainda não está pronto\"
+                sleep 10
+              fi
+            done
+            
+            # Verificar N8N via proxy
+            if curl -f -s http://localhost/n8n/ > /dev/null; then
+              echo '✓ N8N acessível via proxy'
+            else
+              echo '✗ N8N não acessível via proxy'
+            fi
+            
+            echo '=== Logs recentes ==='
+            echo '--- Nginx ---'
+            docker logs nginx --tail 5
+            echo '--- N8N ---'
+            docker logs n8n --tail 5
           "
-      - name: Debug containers
+
+      # 9. Notificar resultado
+      - name: Deployment summary
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud &&
-            echo '=== CLEANING OLD CONTAINERS ===' &&
-            docker compose down &&
-            docker system prune -f &&
-            echo '=== STARTING FRESH ===' &&
-            docker compose --env-file .env up -d &&
-            sleep 30 &&
-            echo '=== CONTAINER STATUS ===' &&
-            docker ps -a &&
-            echo '=== N8N LOGS ===' &&
-            docker logs n8n --tail 50 &&
-            echo '=== TESTING DIRECT ACCESS ===' &&
-            curl -I http://localhost:5678/ || echo 'N8N not responding' &&
-            curl -I http://localhost:3000/ || echo 'Grafana not responding' &&
-            curl -I http://localhost:9000/ || echo 'Portainer not responding'
-          "
+          echo "🚀 Deploy concluído!"
+          echo "🌐 N8N disponível em: http://${{ secrets.VM_HOST }}/n8n/"
+          echo "📊 Status: http://${{ secrets.VM_HOST }}/health"
