@@ -19,22 +19,23 @@ services:
     networks:
       - app-net
 
-  # N8N
+  # N8N - Configuração simplificada
   n8n:
-    image: n8nio/n8n
+    image: n8nio/n8n:latest
     container_name: n8n
     restart: always
     environment:
-      - N8N_PORT=5678
-      - N8N_PATH=/n8n  # Manter esta configuração
       - N8N_HOST=${DOMAIN}
-      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - NODE_ENV=production
+      - WEBHOOK_URL=http://${DOMAIN}/n8n/
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
       - TZ=America/Sao_Paulo
-    expose:
-      - "5678"
+    ports:
+      - "5678:5678"  # Expor temporariamente para debug
     volumes:
       - ./n8n_data:/home/node/.n8n
     networks:
@@ -46,10 +47,10 @@ services:
     container_name: grafana
     restart: always
     environment:
-      - GF_SERVER_ROOT_URL=http://tfx-vm-1.eastus.cloudapp.azure.com/grafana
+      - GF_SERVER_ROOT_URL=http://${DOMAIN}/grafana
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
-    expose:
-      - "3000"
+    ports:
+      - "3000:3000"  # Expor temporariamente para debug
     volumes:
       - ./grafana_data:/var/lib/grafana
     networks:
@@ -61,8 +62,8 @@ services:
     container_name: portainer
     restart: always
     command: --base-url=/portainer
-    expose:
-      - "9000"
+    ports:
+      - "9000:9000"  # Expor temporariamente para debug
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./portainer_data:/data

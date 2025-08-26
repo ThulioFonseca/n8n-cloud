@@ -49,3 +49,22 @@ jobs:
             echo '=== CONTAINER STATUS ===' &&
             docker ps
           "
+      - name: Debug containers
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+            cd ~/n8n-cloud &&
+            echo '=== CLEANING OLD CONTAINERS ===' &&
+            docker compose down &&
+            docker system prune -f &&
+            echo '=== STARTING FRESH ===' &&
+            docker compose --env-file .env up -d &&
+            sleep 30 &&
+            echo '=== CONTAINER STATUS ===' &&
+            docker ps -a &&
+            echo '=== N8N LOGS ===' &&
+            docker logs n8n --tail 50 &&
+            echo '=== TESTING DIRECT ACCESS ===' &&
+            curl -I http://localhost:5678/ || echo 'N8N not responding' &&
+            curl -I http://localhost:3000/ || echo 'Grafana not responding' &&
+            curl -I http://localhost:9000/ || echo 'Portainer not responding'
+          "
