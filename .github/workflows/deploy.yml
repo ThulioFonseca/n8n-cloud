@@ -1,0 +1,39 @@
+name: Deploy n8n cloud
+
+on:
+  push:
+    branches:
+      - main  # disparar deploy apenas no branch main
+
+jobs:
+  deploy:
+    name: Deploy to VM
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout do código
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      # 2. Configurar SSH para acessar a VM
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VM_SSH_KEY }}
+
+      # 3. Copiar os arquivos do repo para a VM (sem sobrescrever o .env)
+      - name: Sync repo to VM
+        run: |
+          rsync -avz --delete \
+            --exclude '.env' \
+            -e "ssh -o StrictHostKeyChecking=no" \
+            ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/n8n-cloud/
+
+      # 4. Subir stack docker na VM
+      - name: Deploy stack on VM
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+            cd ~/n8n-cloud &&
+            docker compose pull &&
+            docker compose --env-file .env up -d
+          "

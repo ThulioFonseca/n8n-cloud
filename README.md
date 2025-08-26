@@ -1,4 +1,4 @@
-# n8n Cloud Deployment
+# n8n Cloud
 
 This repository contains the Docker Compose setup and scripts to deploy **n8n** on a personal VM using **NGINX reverse proxy** with **HTTPS via Let's Encrypt**. It is designed for homelab or small production scenarios. Sensitive credentials are stored in a `.env` file and **must not** be committed to this repository.
 
