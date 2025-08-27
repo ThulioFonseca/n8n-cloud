@@ -1,52 +1,85 @@
 networks:
-  app-net:
+  n8n-network:
     driver: bridge
+    name: n8n-network
+
+volumes:
+  n8n-data:
+    driver: local
+    name: n8n-data
 
 services:
-  # Nginx Proxy Reverso
   nginx:
     image: nginx:alpine
-    container_name: nginx
-    restart: always
+    container_name: n8n-nginx
+    restart: unless-stopped
+    labels:
+      - "com.n8n.service=nginx"
+      - "com.n8n.environment=production"
     ports:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - n8n  # Apenas aguarda o container iniciar, não o healthcheck
+      - n8n
     networks:
-      - app-net
+      - n8n-network
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+        reservations:
+          memory: 64M
 
-  # N8N
   n8n:
     image: n8nio/n8n:latest
-    container_name: n8n
-    restart: always
+    container_name: n8n-app
+    restart: unless-stopped
     user: "1000:1000"
+    labels:
+      - "com.n8n.service=n8n"
+      - "com.n8n.environment=production"
     environment:
+      # Core Configuration
+      - NODE_ENV=production
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
-      - NODE_ENV=production
-      - WEBHOOK_URL=http://${DOMAIN}/n8n/webhook/
-      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_PATH=/n8n/
+
+      # Authentication
+      - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      
+      # Security & Performance
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
-      - TZ=America/Sao_Paulo
+      - N8N_RUNNERS_ENABLED=false
+      - N8N_METRICS=false
+      - N8N_SECURE_COOKIE=false
+      
+      # Logging
+      - N8N_LOG_LEVEL=${N8N_LOG_LEVEL:-warn}
+      - N8N_LOG_OUTPUT=console
+      
+      # Database
       - DB_TYPE=sqlite
       - DB_SQLITE_POOL_SIZE=3
-      - N8N_RUNNERS_ENABLED=true
-      - N8N_LOG_LEVEL=info
-      - N8N_METRICS=false
+      
+      # Webhooks
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost/webhook/}
+      
+      # Timezone
+      - TZ=${TZ:-UTC}
+      
     expose:
       - "5678"
     volumes:
-      - ./n8n_data:/home/node/.n8n
+      - n8n-data:/home/node/.n8n
     networks:
-      - app-net
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:5678/healthz"]
-      interval: 15s
-      timeout: 10s
-      retries: 4
-      start_period: 90s
+      - n8n-network
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M

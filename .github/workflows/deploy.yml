@@ -1,188 +1,103 @@
-name: Deploy N8N to Azure VM
+name: Deploy N8N Production
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
+
+env:
+  DEPLOY_PATH: "~/n8n-production"
 
 jobs:
   deploy:
-    name: Deploy to Azure VM
+    name: Production Deployment
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     
     steps:
-      # 1. Checkout do código
-      - name: Checkout repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Configurar SSH
-      - name: Setup SSH
+      - name: Setup SSH Agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.VM_SSH_KEY }}
 
-      # 3. Verificar conectividade
-      - name: Test SSH connection
+      - name: Verify SSH Connectivity
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "echo 'SSH connection successful'"
+          ssh -o StrictHostKeyChecking=no \
+              -o ConnectTimeout=10 \
+              ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} \
+              "echo 'Connection verified'"
 
-      # 4. Sincronizar arquivos
-      - name: Sync files to VM
+      - name: Sync Application Files
         run: |
           rsync -avz --delete \
-            --exclude '.env' \
-            --exclude 'n8n_data/' \
-            --exclude '.git/' \
-            --exclude 'README.md' \
+            --exclude='.env' \
+            --exclude='n8n_data/' \
+            --exclude='.git/' \
+            --exclude='*.md' \
+            --exclude='.github/' \
             -e "ssh -o StrictHostKeyChecking=no" \
-            ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/n8n-cloud/
+            ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:${{ env.DEPLOY_PATH }}/
 
-      # 5. Verificar .env
-      - name: Check .env file
+      - name: System Cleanup & Environment Setup
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud
-            if [ ! -f .env ]; then
-              echo 'ERRO: Arquivo .env não encontrado!'
-              exit 1
-            else
-              echo '.env encontrado ✓'
-            fi
-          "
-
-      # 6. Preparar ambiente e corrigir permissões
-      - name: Prepare environment
-        run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud
+            cd ${{ env.DEPLOY_PATH }}
             
-            echo '=== Parando containers antigos ==='
-            docker compose down --remove-orphans || true
+            # Verify environment file
+            [[ ! -f .env ]] && echo 'ERROR: .env file missing' && exit 1
             
-            echo '=== Preparando diretórios ==='
-            mkdir -p n8n_data
+            # Stop existing services
+            docker compose down --remove-orphans 2>/dev/null || true
             
-            echo '=== Corrigindo permissões ==='
+            # Docker system cleanup
+            docker container prune -f
+            docker image prune -f
+            docker volume prune -f
+            docker network prune -f
+            
+            # Setup data directory with proper permissions
             sudo rm -rf n8n_data/* n8n_data/.* 2>/dev/null || true
+            mkdir -p n8n_data
             sudo chown -R 1000:1000 n8n_data/
             sudo chmod -R 755 n8n_data/
-            
-            echo '=== Verificando Docker ==='
-            docker --version
-            docker compose version
           "
 
-      # 7. Deploy da aplicação
-      - name: Deploy application
+      - name: Deploy Application
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud
+            cd ${{ env.DEPLOY_PATH }}
             
-            echo '=== Baixando imagens ==='
-            docker compose pull
+            # Pull latest images
+            docker compose pull --quiet
             
-            echo '=== Iniciando serviços ==='
-            docker compose --env-file .env up -d
+            # Deploy services
+            docker compose up -d --quiet-pull
             
-            echo '=== Aguardando estabilização ==='
-            sleep 30
-            
-            echo '=== Monitoramento não-bloqueante do N8N ==='
-            for i in {1..5}; do
-              echo \"Tentativa \$i/5 de verificar N8N...\"
-              
-              # Verificar se container está rodando
-              if docker compose ps n8n | grep -q 'Up'; then
-                echo \"✓ Container N8N está rodando\"
-                
-                # Verificar healthcheck (mas não falhar se não responder)
-                STATUS=\$(docker compose ps n8n --format json | jq -r '.[0].Health // \"no-health\"' 2>/dev/null || echo 'unknown')
-                echo \"Status healthcheck: \$STATUS\"
-                
-                # Tentar conexão direta (mas não falhar)
-                if timeout 10 docker exec n8n wget -q --spider http://localhost:5678/healthz 2>/dev/null; then
-                  echo \"✓ N8N respondendo diretamente\"
-                  break
-                else
-                  echo \"⚠ N8N ainda não responde diretamente (tentativa \$i/5)\"
-                fi
-              else
-                echo \"⚠ Container N8N não está rodando\"
-              fi
-              
-              if [ \$i -lt 5 ]; then
-                sleep 15
-              fi
-            done
-            
-            echo '=== Deploy concluído (independente do status do N8N) ==='
+            # Wait for services to stabilize
+            sleep 20
           "
 
-      # 8. Verificar deploy (informativamente, sem falhar)
-      - name: Post-deployment check
+      - name: Verify Deployment
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud
+            cd ${{ env.DEPLOY_PATH }}
             
-            echo '=== Status dos containers ==='
-            docker compose ps
+            # Check container status
+            NGINX_STATUS=\$(docker compose ps nginx --format json | jq -r '.[0].State' 2>/dev/null || echo 'failed')
+            N8N_STATUS=\$(docker compose ps n8n --format json | jq -r '.[0].State' 2>/dev/null || echo 'failed')
             
-            echo '=== Verificações informativas ==='
+            echo \"Container Status: nginx=\$NGINX_STATUS, n8n=\$N8N_STATUS\"
             
-            # Nginx
-            if curl -f -s http://localhost/health > /dev/null 2>&1; then
-              echo '✓ Nginx funcionando'
-            else
-              echo '⚠ Nginx com problemas'
-            fi
-            
-            # N8N direto
-            if timeout 10 docker exec n8n wget -q --spider http://localhost:5678/healthz 2>/dev/null; then
-              echo '✓ N8N respondendo diretamente'
-            else
-              echo '⚠ N8N não responde diretamente ainda'
-            fi
-            
-            # N8N via proxy
-            if timeout 15 curl -f -s http://localhost/n8n/ > /dev/null 2>&1; then
-              echo '✓ N8N acessível via proxy'
-            else
-              echo '⚠ N8N não acessível via proxy ainda'
-            fi
-            
-            echo ''
-            echo 'ℹ️  Se algum serviço não estiver funcionando, aguarde alguns minutos'
-            echo 'ℹ️  e faça debug via SSH para investigar os logs.'
+            # Basic connectivity tests
+            timeout 10 curl -sf http://localhost/health >/dev/null && echo '✓ Nginx healthy' || echo '✗ Nginx failed'
+            timeout 15 curl -sf http://localhost/n8n/ >/dev/null && echo '✓ N8N accessible' || echo '✗ N8N failed'
           "
 
-      # 9. Logs de debug (sempre executar)
-      - name: Debug information
-        if: always()
+      - name: Deployment Summary
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            cd ~/n8n-cloud
-            echo '=== Informações para debug ==='
-            echo '--- Status containers ---'
-            docker compose ps
-            echo '--- Permissões volume ---'
-            ls -la n8n_data/ 2>/dev/null || echo 'Volume vazio'
-            echo '--- Últimos logs N8N ---'
-            docker logs n8n --tail 15 2>/dev/null || echo 'Sem logs do N8N'
-            echo '--- Últimos logs Nginx ---'
-            docker logs nginx --tail 10 2>/dev/null || echo 'Sem logs do Nginx'
-            echo '--- Rede Docker ---'
-            docker network ls | grep n8n-cloud || echo 'Rede não encontrada'
-          "
-
-      # 10. Resultado sempre positivo
-      - name: Deployment completed
-        run: |
-          echo "🚀 Deploy executado com sucesso!"
-          echo "🌐 N8N: http://${{ secrets.VM_HOST }}/n8n/"
-          echo "📊 Status: http://${{ secrets.VM_HOST }}/health"
-          echo ""
-          echo "💡 Para debug via SSH:"
-          echo "   ssh ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}"
-          echo "   cd ~/n8n-cloud"
-          echo "   docker logs n8n -f"
+          echo "🚀 Production deployment completed"
+          echo "🌐 Application: http://${{ secrets.VM_HOST }}/n8n/"
+          echo "📊 Health Check: http://${{ secrets.VM_HOST }}/health"
