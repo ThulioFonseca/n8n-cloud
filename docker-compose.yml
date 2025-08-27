@@ -11,7 +11,7 @@ volumes:
 services:
   nginx:
     image: nginx:alpine
-    container_name: n8n-nginx
+    container_name: nginx
     restart: unless-stopped
     labels:
       - "com.n8n.service=nginx"
@@ -33,7 +33,7 @@ services:
 
   n8n:
     image: n8nio/n8n:latest
-    container_name: n8n-app
+    container_name: n8n
     restart: unless-stopped
     user: "1000:1000"
     labels:
