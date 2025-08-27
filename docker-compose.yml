@@ -50,27 +50,31 @@ services:
       - N8N_BASIC_AUTH_ACTIVE=${N8N_BASIC_AUTH_ACTIVE:-true}
       - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
       - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
-      
+
       # Security & Performance
       - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=false
       - N8N_RUNNERS_ENABLED=false
       - N8N_METRICS=false
       - N8N_SECURE_COOKIE=false
-      
+      - N8N_PROXY_HOPS=1
+      - N8N_LISTEN_ADDRESS=0.0.0.0
+      - N8N_TRUST_PROXY=true
+      - N8N_PROXY_HEADERS=X-Forwarded-For,X-Forwarded-Proto,X-Forwarded-Host
+
       # Logging
       - N8N_LOG_LEVEL=${N8N_LOG_LEVEL:-warn}
       - N8N_LOG_OUTPUT=console
-      
+
       # Database
       - DB_TYPE=sqlite
       - DB_SQLITE_POOL_SIZE=3
-      
+
       # Webhooks
       - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost/webhook/}
-      
+
       # Timezone
       - TZ=${TZ:-UTC}
-      
+
     expose:
       - "5678"
     volumes:
