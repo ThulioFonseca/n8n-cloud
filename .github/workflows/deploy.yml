@@ -27,7 +27,7 @@ jobs:
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "echo 'SSH connection successful'"
 
-      # 4. Sincronizar arquivos (excluindo .env e dados)
+      # 4. Sincronizar arquivos
       - name: Sync files to VM
         run: |
           rsync -avz --delete \
@@ -38,19 +38,16 @@ jobs:
             -e "ssh -o StrictHostKeyChecking=no" \
             ./ ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/n8n-cloud/
 
-      # 5. Verificar se .env existe na VM
+      # 5. Verificar .env
       - name: Check .env file
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
             cd ~/n8n-cloud
             if [ ! -f .env ]; then
-              echo 'ERRO: Arquivo .env não encontrado na VM!'
-              echo 'Crie o arquivo .env com as variáveis necessárias'
+              echo 'ERRO: Arquivo .env não encontrado!'
               exit 1
             else
               echo '.env encontrado ✓'
-              echo 'Variáveis definidas:'
-              grep -v PASSWORD .env || true
             fi
           "
 
@@ -60,15 +57,18 @@ jobs:
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
             cd ~/n8n-cloud
             
-            # Criar diretórios necessários
-            mkdir -p n8n_data
+            # Parar containers antigos
+            docker compose down --remove-orphans || true
             
-            # Ajustar permissões
+            # Criar e ajustar diretórios
+            mkdir -p n8n_data
             sudo chown -R 1000:1000 n8n_data/ || true
             
-            # Verificar Docker
-            docker --version
-            docker compose version
+            # Limpar dados corrompidos se necessário
+            if [ -f n8n_data/.corrupted ]; then
+              echo 'Removendo dados corrompidos...'
+              rm -rf n8n_data/*
+            fi
           "
 
       # 7. Deploy da aplicação
@@ -77,17 +77,41 @@ jobs:
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
             cd ~/n8n-cloud
             
-            echo '=== Parando containers antigos ==='
-            docker compose down --remove-orphans
-            
-            echo '=== Baixando imagens mais recentes ==='
+            echo '=== Baixando imagens ==='
             docker compose pull
             
-            echo '=== Iniciando aplicação ==='
-            docker compose --env-file .env up -d
+            echo '=== Iniciando N8N ==='
+            docker compose --env-file .env up n8n -d
             
-            echo '=== Aguardando inicialização ==='
-            sleep 30
+            echo '=== Aguardando N8N (pode demorar até 2 minutos) ==='
+            
+            # Monitorar logs em background
+            timeout 120 docker logs n8n -f &
+            LOG_PID=\$!
+            
+            # Aguardar healthcheck
+            for i in {1..24}; do
+              if docker compose ps n8n | grep -q 'healthy'; then
+                echo '✓ N8N inicializado com sucesso!'
+                kill \$LOG_PID 2>/dev/null || true
+                break
+              elif docker compose ps n8n | grep -q 'unhealthy'; then
+                echo '✗ N8N falhou no healthcheck'
+                kill \$LOG_PID 2>/dev/null || true
+                docker logs n8n --tail 20
+                exit 1
+              else
+                echo \"Aguardando... (\$i/24)\"
+                sleep 5
+              fi
+            done
+            
+            kill \$LOG_PID 2>/dev/null || true
+            
+            echo '=== Iniciando Nginx ==='
+            docker compose --env-file .env up nginx -d
+            
+            sleep 10
           "
 
       # 8. Verificar deploy
@@ -99,44 +123,54 @@ jobs:
             echo '=== Status dos containers ==='
             docker compose ps
             
-            echo '=== Health check dos serviços ==='
+            echo '=== Verificando saúde dos serviços ==='
             
             # Verificar Nginx
             if curl -f -s http://localhost/health > /dev/null; then
               echo '✓ Nginx está funcionando'
             else
               echo '✗ Nginx não está respondendo'
+              docker logs nginx --tail 10
             fi
             
-            # Aguardar N8N ficar pronto
-            echo 'Aguardando N8N...'
-            for i in {1..12}; do
-              if docker exec n8n curl -f http://localhost:5678/healthz > /dev/null 2>&1; then
-                echo '✓ N8N está funcionando'
+            # Verificar N8N diretamente
+            if docker exec n8n wget -q --spider http://localhost:5678/ 2>/dev/null; then
+              echo '✓ N8N está respondendo diretamente'
+            else
+              echo '✗ N8N não está respondendo diretamente'
+              docker logs n8n --tail 20
+            fi
+            
+            # Verificar N8N via proxy (com retry)
+            echo 'Testando N8N via proxy...'
+            for i in {1..5}; do
+              if curl -f -s -m 30 http://localhost/n8n/ > /dev/null; then
+                echo '✓ N8N acessível via proxy'
                 break
               else
-                echo \"Tentativa \$i/12: N8N ainda não está pronto\"
+                echo \"Tentativa \$i/5 falhou, aguardando...\"
                 sleep 10
               fi
             done
-            
-            # Verificar N8N via proxy
-            if curl -f -s http://localhost/n8n/ > /dev/null; then
-              echo '✓ N8N acessível via proxy'
-            else
-              echo '✗ N8N não acessível via proxy'
-            fi
-            
-            echo '=== Logs recentes ==='
-            echo '--- Nginx ---'
-            docker logs nginx --tail 5
-            echo '--- N8N ---'
-            docker logs n8n --tail 5
           "
 
-      # 9. Notificar resultado
+      # 9. Logs finais
+      - name: Show final logs
+        if: always()
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
+            cd ~/n8n-cloud
+            echo '=== Status final ==='
+            docker compose ps
+            echo '=== Últimos logs do N8N ==='
+            docker logs n8n --tail 15
+            echo '=== Últimos logs do Nginx ==='
+            docker logs nginx --tail 10
+          "
+
+      # 10. Resultado final
       - name: Deployment summary
         run: |
           echo "🚀 Deploy concluído!"
-          echo "🌐 N8N disponível em: http://${{ secrets.VM_HOST }}/n8n/"
+          echo "🌐 N8N: http://${{ secrets.VM_HOST }}/n8n/"
           echo "📊 Status: http://${{ secrets.VM_HOST }}/health"
